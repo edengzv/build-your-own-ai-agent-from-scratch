@@ -1,0 +1,25 @@
+# Dependencies
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files from Agent
+.transcripts/
+.tasks/
+.team/
+.worktrees/
