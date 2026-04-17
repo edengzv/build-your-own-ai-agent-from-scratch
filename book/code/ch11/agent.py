@@ -29,8 +29,7 @@ from background import (
     BG_CHECK_TOOL,
     make_bg_handlers,
 )
-from tasks import TaskGraph, TASK_GRAPH_TOOLS, make_task_graph_handlers
-from team import TeamManager, TEAM_TOOLS  # NEW
+from tasks import TaskGraph, TASK_GRAPH_TOOLS, make_task_graph_handlers  # NEW
 
 # --- 配置 ---
 MODEL = "claude-sonnet-4-20250514"
