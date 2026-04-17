@@ -1,12 +1,12 @@
 """
-MiniAgent — Chapter 10: 智能体团队
-Agent 现在可以创建持久化队友，通过邮箱系统通信，组建多智能体团队。
+MiniAgent — Chapter 11: 团队协议
+Agent 现在支持请求-响应协议：安全关闭队友、审批队友方案。
 
 用法 (交互模式):
     python miniagent/agent.py
 
 用法 (单次执行):
-    python miniagent/agent.py "创建一个审查员队友帮我检查代码"
+    python miniagent/agent.py "关闭 reviewer 队友"
 """
 
 import os
@@ -29,12 +29,19 @@ from background import (
     BG_CHECK_TOOL,
     make_bg_handlers,
 )
-from tasks import TaskGraph, TASK_GRAPH_TOOLS, make_task_graph_handlers  # NEW
+from tasks import TaskGraph, TASK_GRAPH_TOOLS, make_task_graph_handlers
+from team import TeamManager, TEAM_TOOLS
+from protocols import (  # NEW
+    LEAD_PROTOCOL_TOOLS,
+    TEAMMATE_PROTOCOL_TOOLS,
+    make_lead_protocol_handlers,
+    make_teammate_protocol_handlers,
+)
 
 # --- 配置 ---
 MODEL = "claude-sonnet-4-20250514"
 
-# NEW: Skill 系统初始化
+# Skill 系统初始化
 _skills = scan_skills()
 _skill_summary = build_skill_summary(_skills)
 
@@ -49,6 +56,9 @@ SYSTEM_TEMPLATE = """你是 MiniAgent，一个通用 AI 助手。你可以通过
 - 将子任务委托给子智能体执行
 - 在后台执行耗时操作
 - 使用持久化任务图管理复杂项目
+- 创建持久化队友，组建多智能体团队
+- 通过邮箱系统与队友通信
+- 使用协议安全关闭队友、审批方案
 
 规则：
 - 收到复杂任务时，用 task_create 创建任务图，定义依赖关系
@@ -56,12 +66,16 @@ SYSTEM_TEMPLATE = """你是 MiniAgent，一个通用 AI 助手。你可以通过
 - 同一时间只处理一个任务（标记为 in_progress）
 - 可以独立完成的子任务，用 task 工具委托给子智能体
 - 耗时操作（测试、构建、安装等），用 bg_run 放到后台执行
+- 需要长期运行的专业角色，用 spawn 创建持久化队友
+- 给队友分配任务用 send，查看回复用 inbox
+- 关闭队友时用 shutdown_request（安全关闭协议），不要直接停止
+- 队友提交方案后用 plan_review 审批
 - 优先使用专用文件工具，而非 bash 命令操作文件
 - 需要领域知识时，用 load_skill 加载对应技能
 - 当对话变长、响应变慢时，用 compact 工具压缩上下文
 - 如果任务不需要工具，直接用文本回答
 - 对不确定的事情，先查看再行动
-""" + _skill_summary  # CHANGED: 动态追加 skill 摘要
+""" + _skill_summary
 
 WORKSPACE = os.getcwd()
 
@@ -150,11 +164,18 @@ TOOLS = [
     TASK_TOOL,
     BG_RUN_TOOL,
     BG_CHECK_TOOL,
-    *TASK_GRAPH_TOOLS,  # NEW: task_create, task_update, task_list, task_get
+    *TASK_GRAPH_TOOLS,
+    *TEAM_TOOLS,
+    *LEAD_PROTOCOL_TOOLS,  # NEW: shutdown_request, plan_review, protocol_list
 ]
 
-# 子 Agent 的工具集（父 Agent 专属工具排除）
-_PARENT_ONLY = {"task", "bg_run", "bg_check", "task_create", "task_update", "task_list", "task_get"}
+# 父 Agent 专属工具
+_PARENT_ONLY = {
+    "task", "bg_run", "bg_check",
+    "task_create", "task_update", "task_list", "task_get",
+    "spawn", "send", "inbox", "team_status",
+    "shutdown_request", "plan_review", "protocol_list",  # NEW
+}
 CHILD_TOOLS = [t for t in TOOLS if t["name"] not in _PARENT_ONLY]
 
 
@@ -244,13 +265,25 @@ def _summarize_input(block) -> str:
         return "(压缩上下文)"
     elif block.name == "task":
         return inp.get("description", "")
-    elif block.name == "bg_run":  # NEW
+    elif block.name == "bg_run":
         return inp.get("command", "")[:60]
     elif block.name == "bg_check":
         return inp.get("task_id", "(all)")
-    elif block.name in ("task_create", "task_update", "task_list", "task_get"):  # NEW
+    elif block.name in ("task_create", "task_update", "task_list", "task_get"):
         desc = inp.get("description", inp.get("task_id", inp.get("status", "")))
         return str(desc)[:60]
+    elif block.name == "spawn":
+        return f"{inp.get('name', '')} ({inp.get('role', '')})"
+    elif block.name == "send":
+        return f"→ {inp.get('to', '')}：{inp.get('content', '')[:40]}"
+    elif block.name in ("inbox", "team_status", "protocol_list"):  # CHANGED
+        return f"({block.name})"
+    elif block.name == "shutdown_request":  # NEW
+        return f"关闭 {inp.get('target', '')}"
+    elif block.name == "plan_review":
+        return f"{inp.get('request_id', '')} {'批准' if inp.get('approve') else '拒绝'}"
+    elif block.name in ("shutdown_respond", "plan_request"):
+        return inp.get("request_id", inp.get("summary", ""))[:50]
     return str(inp)[:80]
 
 
@@ -260,7 +293,8 @@ def agent_loop(
     todo_manager: TodoManager | None = None,
     context_manager: ContextManager | None = None,
     bg_manager: BackgroundManager | None = None,
-    task_graph: TaskGraph | None = None,  # NEW
+    task_graph: TaskGraph | None = None,
+    team_manager: TeamManager | None = None,
 ) -> None:
     """Agent 的核心：一个 while 循环。"""
     client = anthropic.Anthropic()
@@ -279,10 +313,10 @@ def agent_loop(
         handlers["compact"] = lambda: context_manager.handle_compact(messages, client)
     if bg_manager is not None:
         handlers.update(make_bg_handlers(bg_manager))
-    if task_graph is not None:  # NEW
+    if task_graph is not None:
         handlers.update(make_task_graph_handlers(task_graph))
 
-    # 子 Agent 的 handler 集合
+    # 子 Agent / 队友的基础 handler
     child_handlers = {
         "bash": handle_bash,
         "read_file": handle_read_file,
@@ -302,6 +336,27 @@ def agent_loop(
 
     handlers["task"] = handle_task
 
+    # Team 工具处理
+    if team_manager is not None:
+        def handle_spawn(name: str, role: str) -> str:
+            # NEW: 队友获得协议工具
+            teammate_handlers = dict(child_handlers)
+            teammate_handlers.update(make_teammate_protocol_handlers(name))
+            return team_manager.spawn(
+                name=name, role=role,
+                agent_loop_fn=agent_loop,
+                tools=CHILD_TOOLS + TEAMMATE_PROTOCOL_TOOLS,  # CHANGED
+                tool_handlers=teammate_handlers,
+                system=SYSTEM_TEMPLATE,
+            )
+        handlers["spawn"] = handle_spawn
+        handlers["send"] = lambda to, content: team_manager.send(to, content)
+        handlers["inbox"] = lambda: team_manager.read_inbox("lead")
+        handlers["team_status"] = lambda: team_manager.list_teammates()
+
+    # NEW: Lead 协议工具处理
+    handlers.update(make_lead_protocol_handlers())
+
     while True:
         # 检查是否需要注入提醒
         if todo_manager is not None:
@@ -309,12 +364,19 @@ def agent_loop(
             if reminder:
                 messages.append({"role": "user", "content": reminder})
 
-        # NEW: 注入后台任务完成通知
+        # 注入后台任务完成通知
         if bg_manager is not None:
             notifications = bg_manager.drain()
             for note in notifications:
                 print(f"  [Background] 任务完成通知")
                 messages.append({"role": "user", "content": note})
+
+        # 注入队友邮箱消息
+        if team_manager is not None:
+            inbox_msg = team_manager.read_inbox("lead")
+            if not inbox_msg.endswith("为空"):
+                print(f"  [Team] 收到队友消息")
+                messages.append({"role": "user", "content": f"<team-inbox>\n{inbox_msg}\n</team-inbox>"})
 
         # 上下文压缩
         if context_manager is not None:
@@ -363,7 +425,8 @@ def repl():
     todo_manager = TodoManager()
     context_manager = ContextManager()
     bg_manager = BackgroundManager()
-    task_graph = TaskGraph()  # NEW
+    task_graph = TaskGraph()
+    team_manager = TeamManager()
     print("MiniAgent REPL (输入 'exit' 退出, 'clear' 清空对话)")
     print(f"工作目录: {WORKSPACE}")
     tool_names = [t["name"] for t in TOOLS]
@@ -391,12 +454,11 @@ def repl():
             todo_manager.__init__()
             context_manager.__init__()
             bg_manager.__init__()
-            # 注意：task_graph 不重置——它是持久化的！
-            print("[对话、任务和上下文已清空（持久化任务图保留）]")  # CHANGED
+            print("[对话、任务和上下文已清空（持久化数据保留）]")
             continue
 
         messages.append({"role": "user", "content": user_input})
-        agent_loop(messages, todo_manager, context_manager, bg_manager, task_graph)  # CHANGED
+        agent_loop(messages, todo_manager, context_manager, bg_manager, task_graph, team_manager)
 
 
 # --- 入口 ---
@@ -407,9 +469,10 @@ def main():
         todo_manager = TodoManager()
         context_manager = ContextManager()
         bg_manager = BackgroundManager()
-        task_graph = TaskGraph()  # NEW
+        task_graph = TaskGraph()
+        team_manager = TeamManager()
         print(f"You: {user_input}")
-        agent_loop(messages, todo_manager, context_manager, bg_manager, task_graph)  # CHANGED
+        agent_loop(messages, todo_manager, context_manager, bg_manager, task_graph, team_manager)
     else:
         repl()
 
