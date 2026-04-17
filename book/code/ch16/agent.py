@@ -1,0 +1,548 @@
+"""
+MiniAgent — Chapter 15: 可观测性
+Agent 现在有完整的可观测性：结构化日志、执行追踪、Token 统计。
+
+用法 (交互模式):
+    python miniagent/agent.py
+
+用法 (单次执行):
+    python miniagent/agent.py "帮我检查项目中有哪些文件"
+"""
+
+import os
+import sys
+import time
+import subprocess
+import anthropic
+
+from todo import TodoManager, TODO_TOOL, make_todo_handler
+from skill_loader import (
+    scan_skills,
+    build_skill_summary,
+    LOAD_SKILL_TOOL,
+    make_load_skill_handler,
+)
+from context import ContextManager, COMPACT_TOOL
+from subagent import run_subagent, TASK_TOOL
+from background import (
+    BackgroundManager,
+    BG_RUN_TOOL,
+    BG_CHECK_TOOL,
+    make_bg_handlers,
+)
+from tasks import TaskGraph, TASK_GRAPH_TOOLS, make_task_graph_handlers
+from team import TeamManager, TEAM_TOOLS
+from protocols import (
+    LEAD_PROTOCOL_TOOLS,
+    TEAMMATE_PROTOCOL_TOOLS,
+    make_lead_protocol_handlers,
+    make_teammate_protocol_handlers,
+)
+from autonomous import (
+    AutonomousLoop,
+    AUTONOMOUS_TOOLS,
+    make_autonomous_handlers,
+)
+from worktree import (
+    WorktreeManager,
+    WORKTREE_TOOLS,
+    make_worktree_handlers,
+)
+from security import (
+    Sandbox,
+    ConfirmationGate,
+    make_security_wrapper,
+)
+from observability import ObservabilityManager  # NEW
+
+# --- 配置 ---
+MODEL = "claude-sonnet-4-20250514"
+
+# Skill 系统初始化
+_skills = scan_skills()
+_skill_summary = build_skill_summary(_skills)
+
+SYSTEM_TEMPLATE = """你是 MiniAgent，一个通用 AI 助手。你可以通过工具与计算机交互来完成任务。
+
+你的能力：
+- 执行 bash 命令
+- 读取、写入、编辑文件
+- 管理任务列表（规划和追踪进度）
+- 按需加载领域知识技能
+- 管理上下文窗口，防止溢出
+- 将子任务委托给子智能体执行
+- 在后台执行耗时操作
+- 使用持久化任务图管理复杂项目
+- 创建持久化队友，组建多智能体团队
+- 通过邮箱系统与队友通信
+- 使用协议安全关闭队友、审批方案
+- 队友可以自主扫描任务板、认领工作
+- 为任务创建隔离的 Git Worktree，避免文件冲突
+
+安全规则：
+- 文件操作限制在工作目录内（路径沙箱）
+- 危险命令（rm -rf、sudo 等）需要人类确认
+- 不同角色的 Agent 有不同的工具权限
+
+规则：
+- 收到复杂任务时，用 task_create 创建任务图，定义依赖关系
+- 简单任务用 todo 工具快速管理，复杂多步任务用 task_create/task_update
+- 同一时间只处理一个任务（标记为 in_progress）
+- 可以独立完成的子任务，用 task 工具委托给子智能体
+- 耗时操作（测试、构建、安装等），用 bg_run 放到后台执行
+- 需要长期运行的专业角色，用 spawn 创建持久化队友
+- 多个队友同时工作时，用 worktree_create 为每个任务创建隔离环境
+- 优先使用专用文件工具，而非 bash 命令操作文件
+- 需要领域知识时，用 load_skill 加载对应技能
+- 当对话变长、响应变慢时，用 compact 工具压缩上下文
+- 如果任务不需要工具，直接用文本回答
+- 对不确定的事情，先查看再行动
+""" + _skill_summary
+
+WORKSPACE = os.getcwd()
+
+# 安全组件
+_sandbox = Sandbox(WORKSPACE)
+_gate = ConfirmationGate()
+
+
+def safe_path(path: str) -> str:
+    """确保路径在工作目录内。"""
+    return _sandbox.check_path(path)
+
+
+# --- 工具定义 ---
+TOOLS = [
+    {
+        "name": "bash",
+        "description": "在系统 shell 中执行命令。用于运行程序、管理进程、安装依赖等操作。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "要执行的 bash 命令",
+                }
+            },
+            "required": ["command"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "读取指定文件的完整内容。适用于查看代码、配置文件、文档等。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "要读取的文件路径（相对于工作目录）",
+                }
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": "将内容写入指定文件。如果文件不存在则创建，存在则覆盖。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "要写入的文件路径（相对于工作目录）",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "要写入的文件内容",
+                },
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": "通过查找并替换来编辑文件。old_string 必须在文件中存在且唯一。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "要编辑的文件路径（相对于工作目录）",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "要被替换的原始文本（必须在文件中唯一匹配）",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "替换后的新文本",
+                },
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+    },
+    TODO_TOOL,
+    LOAD_SKILL_TOOL,
+    COMPACT_TOOL,
+    TASK_TOOL,
+    BG_RUN_TOOL,
+    BG_CHECK_TOOL,
+    *TASK_GRAPH_TOOLS,
+    *TEAM_TOOLS,
+    *LEAD_PROTOCOL_TOOLS,
+    *WORKTREE_TOOLS,
+]
+
+# 父 Agent 专属工具
+_PARENT_ONLY = {
+    "task", "bg_run", "bg_check",
+    "task_create", "task_update", "task_list", "task_get",
+    "spawn", "send", "inbox", "team_status",
+    "shutdown_request", "plan_review", "protocol_list",
+    "worktree_create", "worktree_remove", "worktree_list",
+}
+CHILD_TOOLS = [t for t in TOOLS if t["name"] not in _PARENT_ONLY]
+
+# 队友的工具集
+TEAMMATE_TOOLS = CHILD_TOOLS + TEAMMATE_PROTOCOL_TOOLS + AUTONOMOUS_TOOLS
+
+
+# --- 工具处理函数 ---
+def handle_bash(command: str) -> str:
+    """执行 bash 命令并返回输出。"""
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=30
+        )
+        output = result.stdout
+        if result.returncode != 0:
+            output += f"\n[stderr]\n{result.stderr}" if result.stderr else ""
+            output += f"\n[exit code: {result.returncode}]"
+        return output if output.strip() else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "[error: command timed out after 30s]"
+
+
+def handle_read_file(path: str) -> str:
+    """读取文件内容。"""
+    try:
+        file_path = safe_path(path)
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except (ValueError, PermissionError) as e:
+        return f"[error: {e}]"
+    except FileNotFoundError:
+        return f"[error: 文件不存在: {path}]"
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+def handle_write_file(path: str, content: str) -> str:
+    """写入文件内容。"""
+    try:
+        file_path = safe_path(path)
+        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"已写入 {path} ({len(content)} 字符)"
+    except (ValueError, PermissionError) as e:
+        return f"[error: {e}]"
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+def handle_edit_file(path: str, old_string: str, new_string: str) -> str:
+    """通过查找替换编辑文件。"""
+    try:
+        file_path = safe_path(path)
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        count = content.count(old_string)
+        if count == 0:
+            return "[error: 未找到要替换的文本]"
+        if count > 1:
+            return f"[error: 找到 {count} 处匹配，需要唯一匹配]"
+
+        new_content = content.replace(old_string, new_string, 1)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return f"已编辑 {path}"
+    except (ValueError, PermissionError) as e:
+        return f"[error: {e}]"
+    except FileNotFoundError:
+        return f"[error: 文件不存在: {path}]"
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+def _summarize_input(block) -> str:
+    """简洁地显示工具调用参数。"""
+    inp = block.input
+    if block.name == "bash":
+        return inp.get("command", "")
+    elif block.name in ("read_file", "write_file", "edit_file"):
+        return inp.get("path", "")
+    elif block.name == "todo":
+        return f"{inp.get('action', '')} {inp.get('content', '')}".strip()
+    elif block.name == "load_skill":
+        return inp.get("name", "")
+    elif block.name == "compact":
+        return "(压缩上下文)"
+    elif block.name == "task":
+        return inp.get("description", "")
+    elif block.name == "bg_run":
+        return inp.get("command", "")[:60]
+    elif block.name == "bg_check":
+        return inp.get("task_id", "(all)")
+    elif block.name in ("task_create", "task_update", "task_list", "task_get"):
+        desc = inp.get("description", inp.get("task_id", inp.get("status", "")))
+        return str(desc)[:60]
+    elif block.name == "spawn":
+        return f"{inp.get('name', '')} ({inp.get('role', '')})"
+    elif block.name == "send":
+        return f"→ {inp.get('to', '')}：{inp.get('content', '')[:40]}"
+    elif block.name in ("inbox", "team_status", "protocol_list", "scan_tasks", "worktree_list"):
+        return f"({block.name})"
+    elif block.name == "shutdown_request":
+        return f"关闭 {inp.get('target', '')}"
+    elif block.name in ("claim_task", "complete_my_task", "worktree_create", "worktree_remove"):
+        return inp.get("task_id", "")
+    return str(inp)[:80]
+
+
+# --- Agent 核心循环 ---
+def agent_loop(
+    messages: list,
+    todo_manager: TodoManager | None = None,
+    context_manager: ContextManager | None = None,
+    bg_manager: BackgroundManager | None = None,
+    task_graph: TaskGraph | None = None,
+    team_manager: TeamManager | None = None,
+    wt_manager: WorktreeManager | None = None,
+    sandbox: Sandbox | None = None,
+    gate: ConfirmationGate | None = None,
+    obs: ObservabilityManager | None = None,  # NEW
+) -> None:
+    """Agent 的核心：一个 while 循环。"""
+    client = anthropic.Anthropic()
+
+    # NEW: 开始追踪
+    if obs:
+        trace_id = obs.start_turn()
+        obs.logger.info("agent_loop_start", trace_id, tools=len(TOOLS))
+
+    # 构建工具处理映射
+    handlers = {
+        "bash": handle_bash,
+        "read_file": handle_read_file,
+        "write_file": handle_write_file,
+        "edit_file": handle_edit_file,
+        "load_skill": make_load_skill_handler(_skills),
+    }
+    if todo_manager is not None:
+        handlers["todo"] = make_todo_handler(todo_manager)
+    if context_manager is not None:
+        handlers["compact"] = lambda: context_manager.handle_compact(messages, client)
+    if bg_manager is not None:
+        handlers.update(make_bg_handlers(bg_manager))
+    if task_graph is not None:
+        handlers.update(make_task_graph_handlers(task_graph))
+    if wt_manager is not None:
+        handlers.update(make_worktree_handlers(wt_manager))
+
+    # 安全包装
+    if gate is not None:
+        raw_bash = handlers["bash"]
+        handlers["bash"] = make_security_wrapper(raw_bash, "bash", sandbox, gate)
+
+    # 子 Agent / 队友的基础 handler
+    child_handlers = {
+        "bash": handle_bash,
+        "read_file": handle_read_file,
+        "write_file": handle_write_file,
+        "edit_file": handle_edit_file,
+        "load_skill": make_load_skill_handler(_skills),
+    }
+
+    def handle_task(description: str, prompt: str) -> str:
+        return run_subagent(
+            description=description,
+            prompt=prompt,
+            tools=CHILD_TOOLS,
+            tool_handlers=child_handlers,
+            system=SYSTEM_TEMPLATE,
+        )
+
+    handlers["task"] = handle_task
+
+    # Team 工具处理
+    if team_manager is not None:
+        def handle_spawn(name: str, role: str) -> str:
+            teammate_handlers = dict(child_handlers)
+            teammate_handlers.update(make_teammate_protocol_handlers(name))
+            auto_loop = AutonomousLoop(name=name, role=role)
+            teammate_handlers.update(make_autonomous_handlers(auto_loop))
+            return team_manager.spawn(
+                name=name, role=role,
+                agent_loop_fn=agent_loop,
+                tools=TEAMMATE_TOOLS,
+                tool_handlers=teammate_handlers,
+                system=SYSTEM_TEMPLATE,
+            )
+        handlers["spawn"] = handle_spawn
+        handlers["send"] = lambda to, content: team_manager.send(to, content)
+        handlers["inbox"] = lambda: team_manager.read_inbox("lead")
+        handlers["team_status"] = lambda: team_manager.list_teammates()
+
+    handlers.update(make_lead_protocol_handlers())
+
+    while True:
+        if todo_manager is not None:
+            reminder = todo_manager.tick()
+            if reminder:
+                messages.append({"role": "user", "content": reminder})
+
+        if bg_manager is not None:
+            notifications = bg_manager.drain()
+            for note in notifications:
+                print(f"  [Background] 任务完成通知")
+                messages.append({"role": "user", "content": note})
+
+        if team_manager is not None:
+            inbox_msg = team_manager.read_inbox("lead")
+            if not inbox_msg.endswith("为空"):
+                print(f"  [Team] 收到队友消息")
+                messages.append({"role": "user", "content": f"<team-inbox>\n{inbox_msg}\n</team-inbox>"})
+
+        if context_manager is not None:
+            context_manager.on_loop_start(messages, client)
+
+        # NEW: 计时 LLM 调用
+        t0 = time.time()
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            system=SYSTEM_TEMPLATE,
+            messages=messages,
+            tools=TOOLS,
+        )
+        llm_ms = round((time.time() - t0) * 1000)
+
+        # NEW: 记录 LLM 调用统计
+        if obs:
+            obs.record_llm_call(response, llm_ms)
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason != "tool_use":
+            for block in response.content:
+                if hasattr(block, "text"):
+                    print(f"\nAgent: {block.text}")
+            if obs:
+                obs.logger.info("agent_loop_end", obs.tracer.trace_id,
+                                reason=response.stop_reason)
+            return
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                handler = handlers.get(block.name)
+                if handler is None:
+                    output = f"[error: 未知工具 {block.name}]"
+                else:
+                    print(f"  [Tool: {block.name}] {_summarize_input(block)}")
+                    t1 = time.time()  # NEW: 计时工具调用
+                    output = handler(**block.input)
+                    tool_ms = round((time.time() - t1) * 1000)
+                    print(f"  {output[:200]}{'...' if len(output) > 200 else ''}")
+                    # NEW: 记录工具调用
+                    if obs:
+                        obs.record_tool_call(block.name, tool_ms)
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": output,
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+
+
+# --- 交互式 REPL ---
+def repl():
+    """交互式对话循环。"""
+    messages = []
+    todo_manager = TodoManager()
+    context_manager = ContextManager()
+    bg_manager = BackgroundManager()
+    task_graph = TaskGraph()
+    team_manager = TeamManager()
+    wt_manager = WorktreeManager()
+    sandbox = _sandbox
+    gate = _gate
+    obs = ObservabilityManager()  # NEW
+    print("MiniAgent REPL (输入 'exit' 退出, 'clear' 清空对话, 'stats' 查看统计)")
+    print(f"工作目录: {WORKSPACE}")
+    tool_names = [t["name"] for t in TOOLS]
+    print(f"工具: {', '.join(tool_names)}")
+    if _skills:
+        print(f"技能: {', '.join(s['name'] for s in _skills)}")
+    else:
+        print("技能: (未找到 skills/ 目录)")
+    print(f"安全: 路径沙箱 + 危险操作确认")
+    print(f"日志: .logs/agent.jsonl")  # NEW
+    print("-" * 50)
+
+    while True:
+        try:
+            user_input = input("\nYou: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            obs.print_summary()  # NEW: 退出时打印统计
+            print("\nBye!")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() == "exit":
+            obs.print_summary()  # NEW
+            print("Bye!")
+            break
+        if user_input.lower() == "stats":  # NEW
+            obs.print_summary()
+            continue
+        if user_input.lower() == "clear":
+            messages.clear()
+            todo_manager.__init__()
+            context_manager.__init__()
+            bg_manager.__init__()
+            print("[对话、任务和上下文已清空（持久化数据保留）]")
+            continue
+
+        messages.append({"role": "user", "content": user_input})
+        agent_loop(messages, todo_manager, context_manager, bg_manager,
+                   task_graph, team_manager, wt_manager, sandbox, gate, obs)
+
+
+# --- 入口 ---
+def main():
+    obs = ObservabilityManager()  # NEW
+    if len(sys.argv) >= 2:
+        user_input = " ".join(sys.argv[1:])
+        messages = [{"role": "user", "content": user_input}]
+        todo_manager = TodoManager()
+        context_manager = ContextManager()
+        bg_manager = BackgroundManager()
+        task_graph = TaskGraph()
+        team_manager = TeamManager()
+        wt_manager = WorktreeManager()
+        print(f"You: {user_input}")
+        agent_loop(messages, todo_manager, context_manager, bg_manager,
+                   task_graph, team_manager, wt_manager, _sandbox, _gate, obs)
+        obs.print_summary()  # NEW
+    else:
+        repl()
+
+
+if __name__ == "__main__":
+    main()
