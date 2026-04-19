@@ -4,6 +4,9 @@
 
 > 上一章的 Agent 只有 bash 一个工具，什么都靠 shell 命令绕路。本章你将引入工具分发机制——一个字典映射 `{工具名: 处理函数}`，并添加三个文件操作工具。核心循环不变，能力翻四倍。
 
+![Conceptual: AI brain dispatching to multiple tools](images/ch02/fig-02-01-concept.png)
+
+*Figure 2-1. Tool dispatch: one brain, many hands — each tool extends the agent's reach.*
 ## The Problem
 
 上一章的 Agent 能工作，但它只有一把锤子——bash。看看它读文件时的样子：

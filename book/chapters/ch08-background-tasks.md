@@ -4,6 +4,9 @@
 
 > 上一章你让 Agent 学会了委托——把子任务交给子智能体处理。但子智能体是同步的——父 Agent 必须等子 Agent 完成才能继续。如果任务是"运行测试套件"（2 分钟）或"安装依赖"（30 秒），整个 Agent 就卡住了。本章你将引入后台任务管理器，让耗时操作在后台线程中异步执行，Agent 继续处理其他事务。
 
+![Conceptual: Extensible modular architecture](images/ch08/fig-08-01-concept.png)
+
+*Figure 8-1. Background tasks: slow operations run in parallel while the agent keeps thinking.*
 ## The Problem
 
 让 Agent 做一个典型的开发工作流：
@@ -255,7 +258,7 @@ miniagent/
 ├── skill_loader.py
 ├── context.py
 ├── subagent.py
-├── background.py       ← NEW: 170 行（BackgroundManager、BG_RUN/BG_CHECK 工具）
+├── background.py       ← NEW: 190 行（BackgroundManager、BG_RUN/BG_CHECK 工具）
 ├── requirements.txt
 └── skills/
     └── code-review/

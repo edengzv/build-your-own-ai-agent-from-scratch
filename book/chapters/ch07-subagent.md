@@ -6,6 +6,9 @@
 
 > **Part III 开始**：从这一章起，你的 Agent 将从"独立工作者"进化为"协调者"。
 
+![Conceptual: Task board with cards in columns](images/ch07/fig-07-01-concept.png)
+
+*Figure 7-1. Sub-agents: delegate tasks to clean, independent workers and collect their results.*
 ## The Problem
 
 让 Agent 做一个多阶段任务：
@@ -303,7 +306,7 @@ miniagent/
 ├── todo.py
 ├── skill_loader.py
 ├── context.py
-├── subagent.py         ← NEW: 103 行（run_subagent, TASK_TOOL, _sub_summarize）
+├── subagent.py         ← NEW: 125 行（run_subagent, TASK_TOOL, _sub_summarize）
 ├── requirements.txt
 └── skills/
     └── code-review/

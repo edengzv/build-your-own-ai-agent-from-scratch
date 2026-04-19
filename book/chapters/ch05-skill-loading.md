@@ -4,6 +4,9 @@
 
 > 你的 Agent 现在能规划任务、操作文件、记住对话。但它仍然只有"通用知识"——它不知道你的团队用什么代码风格，不知道你的项目有什么约定，也不知道如何按照特定规范做代码审查。本章你将构建一个 Skill（技能）系统，让 Agent 能按需加载领域知识，从"什么都会一点"变为"需要时能精通"。
 
+![Conceptual: Pluggable knowledge modules](images/ch05/fig-05-01-concept.png)
+
+*Figure 5-1. Error recovery: when the path breaks, build a bridge and keep moving.*
 ## The Problem
 
 假设你希望 Agent 按照团队规范做代码审查。最直觉的做法是把审查指南塞进 system prompt：
@@ -431,7 +434,7 @@ Skill 正文应该是可以直接"照做"的指令，而非抽象的原则。
 miniagent/
 ├── agent.py            ← CHANGED: +20 行（skill 导入、初始化、handler、REPL 显示）
 ├── todo.py
-├── skill_loader.py     ← NEW: 103 行（扫描、摘要、加载、工具定义）
+├── skill_loader.py     ← NEW: 102 行（扫描、摘要、加载、工具定义）
 ├── requirements.txt
 └── skills/             ← NEW: 技能目录
     └── code-review/

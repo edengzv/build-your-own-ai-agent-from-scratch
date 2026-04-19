@@ -2,184 +2,159 @@
 
 > **Motto**: "各自在自己的目录工作，互不干扰"
 
-> 到这里，你的多智能体系统有一个致命问题：所有 Agent 都在同一个工作目录中操作。当两个队友同时编辑 `app.py`，一个的修改会被另一个覆盖。本章引入 Git Worktree 隔离——每个任务在自己的独立工作目录中执行，通过分支合并回主线。
+> 上一章让队友学会了自主认领任务。但有个严重问题被忽略了——多个队友在同一个目录工作。如果两个队友同时编辑 `app.py`，一个的修改会被另一个覆盖。本章引入 Git Worktree 绑定任务的机制，每个队友在自己的独立工作目录中操作。
+
+![Conceptual: Security shield dome](images/ch13/fig-13-01-concept.png)
+
+*Figure 13-1. Work isolation: each teammate operates in their own independent workspace.*
 
 ## The Problem
 
-场景复现：
-
 ```
-reviewer: [Tool: edit_file] app.py  (修改第 50 行)
-tester:   [Tool: write_file] app.py (重写整个文件，覆盖 reviewer 的修改)
-```
+Lead: [Tool: spawn] reviewer (代码审查员)
+      [Tool: spawn] developer (开发者)
+      [Tool: send] → reviewer：审查 app.py
+      [Tool: send] → developer：重构 app.py
 
-两个 Agent 在同一个文件上"打架"。更糟糕的是，它们可能在不同文件中创建互相矛盾的修改——reviewer 重命名了一个函数，tester 还在用旧名字写测试。
+reviewer: [Tool: read_file] app.py → 读取到版本 A
+developer: [Tool: edit_file] app.py → 将版本 A 改为版本 B
 
-这不是 Agent 的问题，是架构的问题。在软件工程中，这个问题早就有解决方案：**分支**。每个人在自己的分支上工作，完成后合并。
-
-## 13.1 控制面 vs 执行面
-
-引入一个重要的概念分离：
-
-```
-控制面 (Control Plane)         执行面 (Execution Plane)
-┌─────────────────────┐       ┌──────────────────────────┐
-│ .tasks/             │       │ .worktrees/              │
-│   task_001.json     │───────│   task_001/              │
-│   task_002.json     │───────│   task_002/              │
-│                     │       │   (每个是完整的工作目录)   │
-└─────────────────────┘       └──────────────────────────┘
+reviewer: [Tool: edit_file] app.py → 将版本 A 改为版本 C
+  → [error: 未找到要替换的文本]  💥
 ```
 
-- **控制面**（`.tasks/`）：存储任务的元数据——描述、状态、依赖、Owner。轻量级 JSON 文件。
-- **执行面**（`.worktrees/`）：存储任务的工作环境——完整的代码副本。通过 Git Worktree 实现。
+reviewer 读到的是版本 A，但 developer 已经将文件改为版本 B。reviewer 的编辑操作基于过时的版本——`old_string` 已经不存在了。
 
-控制面是"地图"，执行面是"战场"。Agent 在控制面上规划，在执行面上执行。
+更糟糕的场景：两个队友同时用 `write_file` 写同一个文件——后写的直接覆盖先写的，数据丢失。
 
-## 13.2 Git Worktree 入门
+这是**多 Agent 文件冲突**——和人类开发者不用分支直接在 main 上工作是一样的问题。
 
-Git Worktree 允许一个仓库同时有多个工作目录，每个绑定到不同的分支：
+## The Solution
 
-```bash
-# 创建 worktree：基于当前分支创建一个新的工作目录
-git worktree add .worktrees/task_001 -b task_001
+引入**两个层面**的分离：
 
-# 列出所有 worktree
-git worktree list
-
-# 删除 worktree
-git worktree remove .worktrees/task_001
+```
+控制面（不变）          执行面（隔离）
+.tasks/                .worktrees/
+├── task_1.json        ├── task_1/     ← reviewer 的工作目录
+├── task_2.json        ├── task_2/     ← developer 的工作目录
+└── task_3.json        └── events.jsonl
 ```
 
-每个 worktree 是完整的工作目录——有自己的文件、自己的暂存区、自己的 HEAD。但它们**共享一个 .git 仓库**，所以创建非常快（不需要 clone）。
+- **控制面** (`.tasks/`)：存储目标和状态——做什么、谁在做、做到哪了
+- **执行面** (`.worktrees/`)：提供隔离的工作环境——每个任务一个 Git Worktree
 
-为什么比复制目录好？
-1. **共享 .git**：不浪费磁盘空间
-2. **自动跟踪分支**：合并冲突可以用标准 git merge 解决
-3. **原子操作**：创建和删除是 git 管理的
+Git Worktree 是 Git 原生的特性：从同一个仓库创建多个工作目录，每个有自己的分支，但共享同一个 `.git` 历史。比复制整个目录高效得多。
 
-## 13.3 WorktreeManager
+## 13.1 WorktreeManager
 
 ```python
 class WorktreeManager:
     def __init__(self, base_dir=""):
-        self._base = base_dir or os.path.join(os.getcwd(), ".worktrees")
-        os.makedirs(self._base, exist_ok=True)
-        self._events: list[dict] = []
+        self._base_dir = base_dir or os.getcwd()
+        os.makedirs(WORKTREES_DIR, exist_ok=True)
 ```
 
-**创建 worktree**：
+**创建 Worktree**：
 
 ```python
-def create(self, task_id, branch="") -> str:
-    branch = branch or f"task/{task_id}"
-    wt_path = os.path.join(self._base, task_id)
-    if os.path.exists(wt_path):
-        return f"[error: worktree {task_id} 已存在]"
+def create(self, task_id, branch=""):
+    if not branch:
+        branch = f"task-{task_id}"
 
-    result = subprocess.run(
-        ["git", "worktree", "add", wt_path, "-b", branch],
-        capture_output=True, text=True
+    wt_path = os.path.join(WORKTREES_DIR, task_id)
+
+    # 创建新分支（从当前 HEAD）
+    subprocess.run(["git", "branch", branch], cwd=self._base_dir, ...)
+    # 创建 worktree
+    subprocess.run(
+        ["git", "worktree", "add", wt_path, branch],
+        cwd=self._base_dir, ...
     )
-    if result.returncode != 0:
-        return f"[error: {result.stderr.strip()}]"
 
-    self._record_event(task_id, "created", branch=branch)
-    return f"已创建 worktree: {wt_path} (分支: {branch})"
+    self._log_event("created", task_id, path=wt_path, branch=branch)
+    return wt_path
 ```
 
-**删除 worktree**：
+每个 worktree 是一个完整的工作目录——有自己的文件树、自己的分支、可以独立 commit。但它们共享同一个 Git 对象库（`.git/`），所以创建速度非常快。
+
+**移除 Worktree**：
 
 ```python
-def remove(self, task_id, keep=False) -> str:
-    wt_path = os.path.join(self._base, task_id)
-    if not os.path.exists(wt_path):
-        return f"[error: worktree {task_id} 不存在]"
-
-    if keep:
-        self._record_event(task_id, "kept")
-        return f"保留 worktree {task_id} 以供检查"
-
-    result = subprocess.run(
+def remove(self, task_id, keep=False):
+    subprocess.run(
         ["git", "worktree", "remove", wt_path, "--force"],
-        capture_output=True, text=True
+        cwd=self._base_dir, ...
     )
-    self._record_event(task_id, "removed")
-    return f"已删除 worktree: {task_id}"
 ```
 
-`keep=True` 选项允许保留 worktree 以供人类检查——有时 Agent 完成的工作需要人类审查后再决定是否合并。
+`keep=True` 保留分支（可以稍后合并），`keep=False` 完全清理。
 
-## 13.4 事件流
+## 13.2 事件日志
 
-每个 worktree 操作都记录为事件：
+每个 worktree 的生命周期事件记录在 `.worktrees/events.jsonl`：
 
-```python
-def _record_event(self, task_id, action, **extra):
-    event = {
-        "task_id": task_id,
-        "action": action,  # created, removed, kept
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        **extra,
-    }
-    self._events.append(event)
+```json
+{"type": "created", "task_id": "task_1", "timestamp": "...", "branch": "task-task_1"}
+{"type": "removed", "task_id": "task_1", "timestamp": "..."}
 ```
 
 状态机：`absent → created → removed | kept`
 
-通过 `get_events()` 可以查看完整的 worktree 生命周期：
+这提供了审计追踪——你可以回顾任何时间点有哪些 worktree 在活动。
 
-```python
-def get_events(self, task_id="") -> str:
-    filtered = self._events
-    if task_id:
-        filtered = [e for e in filtered if e["task_id"] == task_id]
-    if not filtered:
-        return "没有 worktree 事件"
-    return "\n".join(json.dumps(e, ensure_ascii=False) for e in filtered)
-```
+## 13.3 三个工具
 
-## 13.5 三个工具
+| 工具 | 功能 | 使用者 |
+|---|---|---|
+| `worktree_create` | 为任务创建隔离工作目录 | Lead |
+| `worktree_remove` | 任务完成后移除 worktree | Lead |
+| `worktree_list` | 列出所有活跃的 worktree | Lead |
 
-| 工具 | 功能 |
-|------|------|
-| `worktree_create` | 为任务创建隔离的工作目录 |
-| `worktree_remove` | 任务完成后清理工作目录 |
-| `worktree_list` | 列出当前所有 worktree |
+这三个工具是 Lead 专属的——队友不需要自己管理 worktree，Lead 在分配任务时创建，完成后清理。
 
-```python
-WORKTREE_TOOLS = [CREATE_WT_TOOL, REMOVE_WT_TOOL, LIST_WT_TOOL]
-```
-
-## 13.6 集成到 Agent
-
-`agent.py` 的变更：
+## 13.4 集成到 Agent
 
 ```python
 from worktree import WorktreeManager, WORKTREE_TOOLS, make_worktree_handlers
 
-# 工具列表添加
-TOOLS = [..., *WORKTREE_TOOLS]
+TOOLS = [
+    ...已有工具...,
+    *WORKTREE_TOOLS,  # NEW
+]
 
-# _PARENT_ONLY 添加
 _PARENT_ONLY = {
     ...,
-    "worktree_create", "worktree_remove", "worktree_list",
+    "worktree_create", "worktree_remove", "worktree_list",  # NEW
 }
+```
 
-# agent_loop 增加参数
-def agent_loop(
-    ...,
-    wt_manager: WorktreeManager | None = None,
-):
-    ...
+`agent_loop` 增加 `wt_manager` 参数：
+
+```python
+def agent_loop(messages, ..., wt_manager=None):
     if wt_manager is not None:
         handlers.update(make_worktree_handlers(wt_manager))
 ```
 
-Worktree 工具放在 `_PARENT_ONLY` 中——只有 Lead 可以创建和管理 worktree。队友在分配到的 worktree 中工作，但不能创建新的。
+## 13.5 工作流
 
-## 13.7 试一试
+完整的隔离工作流：
+
+```
+1. Lead: task_create("实现 API") → task_1
+2. Lead: worktree_create("task_1") → .worktrees/task_1/
+3. Lead: spawn("developer") 
+4. Lead: send("developer", "在 .worktrees/task_1/ 中实现 API")
+5. developer: 在隔离目录中工作... commit 到 task-task_1 分支
+6. developer: complete_my_task("task_1")
+7. Lead: worktree_remove("task_1", keep=True)  # 保留分支用于 review
+8. Lead: git merge task-task_1  # 合并回主分支
+```
+
+每个队友在自己的分支上工作，完成后通过 Git merge 合并。冲突在合并时才处理——而不是在编辑时互相覆盖。
+
+## 13.6 试一试
 
 ```bash
 cd miniagent
@@ -187,53 +162,68 @@ python agent.py
 ```
 
 ```
-You: 为 task_001 创建一个工作目录
+工具: bash, read_file, write_file, edit_file, todo, load_skill, compact, task,
+      bg_run, bg_check, task_create, task_update, task_list, task_get,
+      spawn, send, inbox, team_status,
+      shutdown_request, plan_review, protocol_list,
+      worktree_create, worktree_remove, worktree_list
+```
 
-  [Tool: worktree_create] task_001
+试试创建隔离工作环境：
 
-You: 列出当前的工作目录
-
-  [Tool: worktree_list]
+```
+You: 创建两个任务，为每个任务创建 worktree，然后列出所有 worktree
 ```
 
 ```
-You: 任务完成了，清理工作目录
-
-  [Tool: worktree_remove] task_001
+You: 查看 .worktrees/ 目录结构
 ```
 
-> **Try It Yourself**：手动进入 `.worktrees/task_001/` 目录，修改一些文件，然后回到主目录看看——两个工作目录是完全独立的。试试 `git log` 对比两边的提交历史。
+> **Try It Yourself**：进入 `.worktrees/task_1/` 目录，用 `git branch` 查看当前分支。你会看到它在 `task-task_1` 分支上，和主目录完全隔离。
 
 ## What Changed
 
 ```
 miniagent/
-├── agent.py            ← CHANGED: +15 行（worktree 导入、参数、handler）
-├── worktree.py         ← NEW: 184 行（WorktreeManager、事件流、3 个工具）
-├── autonomous.py
-├── protocols.py
-├── team.py
-├── tasks.py
-├── background.py
+├── agent.py            ← CHANGED: +15 行（worktree 导入、handler 注册）
+├── todo.py
+├── skill_loader.py
 ├── context.py
 ├── subagent.py
-├── skill_loader.py
-└── todo.py
+├── background.py
+├── tasks.py
+├── team.py
+├── protocols.py
+├── autonomous.py
+├── worktree.py         ← NEW: 185 行（WorktreeManager、事件日志、3 个工具）
+├── requirements.txt
+└── skills/
+    └── code-review/
+        └── SKILL.md
 ```
 
 | 指标 | Chapter 12 | Chapter 13 |
-|------|-----------|------------|
-| 工具数 | 26 | **29** (+worktree_create, +worktree_remove, +worktree_list) |
+|------|------------|------------|
+| 工具数 | 21 | **24** (+worktree_create, +worktree_remove, +worktree_list) |
 | 模块数 | 10 | **11** (+worktree.py) |
-| 能力 | 自主认领 | **+工作目录隔离** |
-| 隔离方式 | 无 | **Git Worktree** |
+| 能力 | 自主认领 | **+Git Worktree 隔离** |
+| 文件安全 | 可能冲突 | **分支隔离** |
+
+**Part IV 完成**。你的多智能体系统现在具备完整的协作能力：
+
+- **团队** (ch10)：持久化队友 + 邮箱通信
+- **协议** (ch11)：安全关闭 + 方案审批
+- **自主** (ch12)：任务扫描 + 自动认领
+- **隔离** (ch13)：Git Worktree + 分支隔离
+
+接下来的 Part V 将为这个系统添加安全保障和可观测性——从实验走向生产。
 
 ## Summary
 
 - 多个 Agent 在同一目录工作会导致文件冲突
-- 控制面（`.tasks/`）管理目标和状态，执行面（`.worktrees/`）提供隔离环境
-- Git Worktree 允许同一仓库有多个工作目录，共享 `.git`，创建快速
-- WorktreeManager 封装了 worktree 的创建、删除、列表和事件记录
-- 事件流记录 worktree 的完整生命周期：absent → created → removed | kept
-- Worktree 工具是 Lead 专属——队友在分配的 worktree 中工作但不创建新的
-- `keep=True` 选项允许保留完成的 worktree 以供人类审查
+- Git Worktree 为每个任务创建隔离的工作目录和分支
+- 控制面 (`.tasks/`) 管理目标，执行面 (`.worktrees/`) 管理环境
+- WorktreeManager 处理 worktree 的创建、移除和列表
+- 事件日志记录 worktree 的完整生命周期
+- worktree 工具是 Lead 专属——队友在被分配的目录中工作
+- 冲突在 Git merge 时处理，而不是在编辑时互相覆盖

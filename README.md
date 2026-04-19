@@ -11,18 +11,28 @@
 git clone <repo-url>
 cd hermas
 
-# 切换到任意章节的代码状态
-git checkout ch01    # Chapter 1: 你好，Agent
-git checkout ch02    # Chapter 2: 工具调用
-git checkout ch03    # Chapter 3: 对话记忆
-# ... 以此类推
-
 # 安装依赖
 pip install -r miniagent/requirements.txt
 
-# 运行
+# 运行最终版本（miniagent/ 目录始终保持最新状态）
 python miniagent/agent.py "你好，帮我列出当前目录的文件"
 ```
+
+## 阅读某个章节的代码
+
+每个章节都有独立的代码快照，位于 `book/code/chXX/` 目录中。推荐直接使用这些快照：
+
+```bash
+# 方式一（推荐）：直接运行章节代码快照
+cd book/code/ch01
+python agent.py "你好，帮我列出当前目录的文件"
+
+# 方式二：使用 git tag 切换到章节状态（ch01-ch09 可用）
+git checkout ch01
+python miniagent/agent.py "你好，帮我列出当前目录的文件"
+```
+
+> **注意**: `book/code/chXX/` 目录中的代码快照是最权威的参考。git tag `ch01`-`ch09` 与快照完全一致；`ch10`-`ch16` 的 tag 存在部分模块为空占位符的历史问题，请使用 `book/code/` 目录中的快照。
 
 ## 项目结构
 
@@ -33,36 +43,39 @@ hermas/
 │   ├── outline.md          # 完整大纲
 │   ├── roadmap.md          # 学习路径图
 │   ├── chapters/           # 各章节内容
-│   └── code/               # 各章节代码快照 (参考)
-├── miniagent/              # MiniAgent 主项目 (累积演进的代码)
+│   └── code/               # 各章节代码快照（权威参考）
+│       ├── ch01/           # Chapter 1 的完整可运行代码
+│       ├── ch02/           # Chapter 2 的完整可运行代码
+│       └── ...             # 每章一个独立目录
+├── miniagent/              # MiniAgent 最终版（= ch16 完整代码）
 │   ├── agent.py            # 核心 Agent
 │   ├── requirements.txt    # 依赖
-│   └── ...                 # 各章节逐步添加的模块
+│   └── ...                 # 全部模块
 └── README.md
 ```
 
 ## 章节标签
 
-每个 git tag 对应一个章节完成时的代码状态：
+每个章节对应 `book/code/chXX/` 中的独立代码快照，同时也有 git tag 可切换：
 
-| Tag | Chapter | 系统状态 |
-|-----|---------|---------|
-| `ch01` | 你好，Agent | 1 tool, 基础循环 |
-| `ch02` | 工具调用 | 4 tools, 工具分发 |
-| `ch03` | 对话记忆 | 4 tools, 多轮对话 REPL |
-| `ch04` | 任务规划 | 5 tools, TodoManager |
-| `ch05` | 知识加载 | 6 tools, Skill 系统 |
-| `ch06` | 上下文管理 | 7 tools, 上下文压缩 |
-| `ch07` | 子智能体 | 7 tools (+task), Subagent |
-| `ch08` | 后台任务 | 8 tools, 异步执行 |
-| `ch09` | 持久化任务 | 11 tools, 任务 DAG |
-| `ch10` | 智能体团队 | 14 tools, 邮箱通信 |
-| `ch11` | 团队协议 | 18 tools, 请求-响应 |
-| `ch12` | 自主智能体 | 20 tools, IDLE/WORK |
-| `ch13` | 工作隔离 | 22 tools, Worktree |
-| `ch14` | 安全与权限 | 22 tools (+sandbox) |
-| `ch15` | 可观测性 | 22 tools (+logging) |
-| `ch16` | 从 MiniAgent 到生产 | 回顾与展望 |
+| 章节 | 代码快照 | 系统状态 |
+|------|---------|---------|
+| Ch01: 你好，Agent | `book/code/ch01/` | 1 tool, 基础循环 |
+| Ch02: 工具调用 | `book/code/ch02/` | 4 tools, 工具分发 |
+| Ch03: 对话记忆 | `book/code/ch03/` | 4 tools, 多轮对话 REPL |
+| Ch04: 任务规划 | `book/code/ch04/` | 5 tools, TodoManager |
+| Ch05: 知识加载 | `book/code/ch05/` | 6 tools, Skill 系统 |
+| Ch06: 上下文管理 | `book/code/ch06/` | 7 tools, 上下文压缩 |
+| Ch07: 子智能体 | `book/code/ch07/` | 8 tools, Subagent |
+| Ch08: 后台任务 | `book/code/ch08/` | 10 tools, 异步执行 |
+| Ch09: 持久化任务 | `book/code/ch09/` | 14 tools, 任务 DAG |
+| Ch10: 智能体团队 | `book/code/ch10/` | 18 tools, 邮箱通信 |
+| Ch11: 团队协议 | `book/code/ch11/` | 23 tools, 请求-响应 |
+| Ch12: 自主智能体 | `book/code/ch12/` | 26 tools, IDLE/WORK |
+| Ch13: 工作隔离 | `book/code/ch13/` | 29 tools, Worktree |
+| Ch14: 安全与权限 | `book/code/ch14/` | 29 tools (+sandbox) |
+| Ch15: 可观测性 | `book/code/ch15/` | 29 tools (+logging) |
+| Ch16: 从 MiniAgent 到生产 | `book/code/ch16/` | 回顾与展望 |
 
 ## 前置要求
 

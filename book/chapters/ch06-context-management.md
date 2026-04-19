@@ -6,6 +6,9 @@
 
 > **Part II 终章**：这是 PLANNING 阶段的最后一章。完成后，你的 Agent 将具备规划、知识和记忆管理三大"思考"能力，为 Part III 的委托机制奠定基础。
 
+![Conceptual: Context compression funnel](images/ch06/fig-06-01-concept.png)
+
+*Figure 6-1. Context compression: distilling a mountain of messages into a dense, essential crystal.*
 ## The Problem
 
 启动 REPL，给 Agent 一个大任务：

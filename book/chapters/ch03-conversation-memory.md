@@ -4,6 +4,9 @@
 
 > 目前的 MiniAgent 每次运行都是一次性的——执行完就忘记一切。本章你将让它拥有多轮对话能力，以交互式 REPL 运行，记住整个会话中的所有交互。同时，你将深入理解消息列表的结构——这是 LLM 记忆的本质。
 
+![Conceptual: Message cards in a flowing timeline](images/ch03/fig-03-01-concept.png)
+
+*Figure 3-1. Conversation memory: a timeline of messages that gives the agent continuity.*
 ## The Problem
 
 打开终端，连续给 Agent 两个相关的指令：

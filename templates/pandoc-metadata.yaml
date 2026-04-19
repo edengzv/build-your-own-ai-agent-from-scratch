@@ -1,0 +1,92 @@
+---
+# Pandoc Metadata for O'Reilly-style Technical Book
+# Usage: pandoc --defaults=templates/pandoc-metadata.yaml chapters/*.md -o build/book.pdf
+
+# Document class and layout
+documentclass: book
+classoption:
+  - openright
+  - twoside
+  - 11pt
+
+# Geometry (standard O'Reilly trim: 7×9.25 in; we use close approximation)
+geometry:
+  - paperwidth=7in
+  - paperheight=9.25in
+  - margin=0.85in
+  - bindingoffset=0.15in
+
+# Table of contents
+toc: true
+toc-depth: 2
+numbersections: true
+secnumdepth: 2
+
+# Fonts — CJK primary (Chinese edition)
+mainfont: "Georgia"
+sansfont: "Helvetica Neue"
+monofont: "Menlo"
+CJKmainfont: "PingFang SC"
+CJKsansfont: "PingFang SC"
+CJKmonofont: "PingFang SC"
+# Fallbacks for Linux:
+# CJKmainfont: "Noto Sans CJK SC"
+# CJKsansfont: "Noto Sans CJK SC"
+# CJKmonofont: "Noto Sans Mono CJK SC"
+
+# PDF engine
+pdf-engine: xelatex
+
+# Code highlighting
+highlight-style: tango
+listings: false
+
+# Header includes for better CJK support
+header-includes: |
+  \usepackage{xeCJK}
+  \usepackage{fancyhdr}
+  \usepackage{graphicx}
+  \usepackage{booktabs}
+  \usepackage{longtable}
+  \usepackage{caption}
+  \usepackage{float}
+  \usepackage{xcolor}
+  \usepackage{titlesec}
+  
+  % Page style
+  \pagestyle{fancy}
+  \fancyhf{}
+  \fancyhead[LE]{\leftmark}
+  \fancyhead[RO]{\rightmark}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0.4pt}
+  
+  % Chapter title formatting (O'Reilly style)
+  \titleformat{\chapter}[display]
+    {\normalfont\huge\bfseries}
+    {\chaptertitlename\ \thechapter}{20pt}{\Huge}
+  \titlespacing*{\chapter}{0pt}{-20pt}{40pt}
+  
+  % Code block background
+  \definecolor{codebg}{RGB}{248,248,248}
+  \definecolor{codeborder}{RGB}{204,204,204}
+  
+  % Figure placement
+  \floatplacement{figure}{htbp}
+  
+  % Prevent orphans and widows
+  \widowpenalty=10000
+  \clubpenalty=10000
+  
+  % CJK line breaking
+  \XeTeXlinebreaklocale "zh"
+  \XeTeXlinebreakskip = 0pt plus 1pt
+
+# Resource paths for images
+resource-path:
+  - "."
+  - "book/images"
+
+# Pandoc extensions
+from: markdown+smart+fenced_code_blocks+backtick_code_blocks+fenced_code_attributes+pipe_tables+strikeout+task_lists+emoji
+---

@@ -4,6 +4,9 @@
 
 > 第 10 章的队友能通信了——Lead 发消息，队友回复。但这种自由文本通信缺乏结构。考虑这个场景：你想关闭一个正在工作的审查员队友。你发送 `send("reviewer", "请停止工作并退出")`。问题是：审查员正在执行文件编辑的中间步骤。它收到"停止"消息后直接退出，留下一个写了一半的文件。本章引入请求-响应协议——为特定操作定义结构化的沟通流程，确保关键操作安全有序。
 
+![Conceptual: Structured protocol messages](images/ch11/fig-11-01-concept.png)
+
+*Figure 11-1. Team protocols: structured, reliable communication between collaborating agents.*
 ## The Problem
 
 上一章的邮箱系统是"原始的"——发什么都行，但也意味着没有任何保障：

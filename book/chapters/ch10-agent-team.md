@@ -6,6 +6,9 @@
 
 > **Part IV 起点**：这是 COLLABORATION 阶段的第一章。接下来四章将构建完整的多智能体协作系统。
 
+![Conceptual: Multi-agent team network](images/ch10/fig-10-01-concept.png)
+
+*Figure 10-1. Agent team: specialized teammates connected by communication channels.*
 ## The Problem
 
 试试这个场景：你在开发一个复杂项目，需要一个人专门负责代码审查。

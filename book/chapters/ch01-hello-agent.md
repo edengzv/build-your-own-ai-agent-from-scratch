@@ -4,6 +4,10 @@
 
 > 本章你将从零开始构建一个 AI Agent。它只有不到 30 行核心代码，却能理解自然语言指令并自主调用工具完成任务。读完本章，你会拥有一个能执行 bash 命令的完整 Agent——这是整本书的种子，后续所有章节都在这个基础上生长。
 
+![Conceptual: A simple conversation loop between human and AI](images/ch01/fig-01-01-concept.png)
+
+*Figure 1-1. The seed of intelligence: a single loop connecting human intent to AI action.*
+
 ## 谁适合读这本书
 
 你不需要是 AI 专家，也不需要了解机器学习或神经网络。如果你满足以下条件，就可以开始：

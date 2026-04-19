@@ -2,56 +2,94 @@
 
 > **Motto**: "队友主动扫描任务板，认领自己能做的"
 
-> 到目前为止，队友都是被动的——Lead 必须通过 `send` 手动分配每一个任务。如果 Lead 创建了一个包含 20 个任务的任务图，它需要逐个发送给合适的队友。Lead 变成了"任务调度器"，而不是"策略决策者"。本章让队友变得自主：在空闲时扫描任务板，找到自己能做的未认领任务，主动认领并执行。
+> 到目前为止，队友只在被明确指示时才工作——Lead 必须通过 `send` 手动分配每一个任务。Lead 忙于"给 reviewer 发消息"、"给 tester 发消息"，变成了一个消息转发器，而不是一个战略思考者。本章让队友变得自主——在空闲时扫描任务板（`.tasks/` 目录），认领自己能做的任务，超时后自动关闭。
 
+![Conceptual: Parallel background processing](images/ch12/fig-12-01-concept.png)
+
+*Figure 12-1. Autonomous agents: teammates that scan for work and act on their own initiative.*
 ## The Problem
 
-```
-You: 创建 20 个代码审查任务
-
-Agent: [Tool: task_create] 审查 module_1.py
-Agent: [Tool: task_create] 审查 module_2.py
-...
-Agent: [Tool: send] → reviewer：审查 module_1.py
-Agent: [Tool: send] → reviewer：审查 module_2.py
-...
-```
-
-Lead 花了大量时间分配任务，而不是思考策略。如果有 3 个 reviewer 队友，Lead 还得负责负载均衡——把任务均匀分给每个人。
-
-理想的模式应该是：Lead 创建任务，队友自动认领。就像真实团队中的看板（Kanban）——Lead 把卡片放到"待做"列，团队成员自己去拿。
-
-## 12.1 IDLE/WORK 循环
-
-每个自主队友运行一个两阶段循环：
+场景：你用 `task_create` 创建了一个 10 步的项目计划，然后 spawn 了两个队友——reviewer 和 tester。
 
 ```
-┌──────────────────────────────┐
-│  IDLE                         │
-│  ├─ 检查邮箱（有消息？→ WORK） │
-│  ├─ 扫描任务板（有未认领？→ WORK）│
-│  ├─ 检查关闭请求              │
-│  └─ 等待 poll_interval（5秒） │
-│      超时计数 → idle_timeout  │
-│      → 自动关闭               │
-└──────────────────────────────┘
-          ↕
-┌──────────────────────────────┐
-│  WORK                         │
-│  ├─ 执行认领的任务            │
-│  ├─ 完成 → 标记任务完成       │
-│  ├─ 重置 idle 计时器          │
-│  └─ 回到 IDLE                │
-└──────────────────────────────┘
+You: 创建项目计划（10 个任务），启动 reviewer 和 tester
+
+Agent: [Tool: task_create] ... (创建了 10 个任务)
+       [Tool: spawn] reviewer (代码审查员)
+       [Tool: spawn] tester (测试工程师)
+       
+       现在我需要分配任务...
+       [Tool: send] → reviewer：请做 task_1
+       
+       (等 reviewer 完成...)
+       
+       [Tool: send] → tester：请做 task_2
+       
+       (等 tester 完成...)
+       
+       [Tool: send] → reviewer：请做 task_3
+       ...
 ```
 
-关键参数：
-- `poll_interval = 5.0`：空闲时每 5 秒检查一次
-- `idle_timeout = 60.0`：连续空闲 60 秒后自动关闭
+Lead 变成了任务队列的手动调度器。10 个任务要发 10 条消息，还要等每个完成后再发下一个。这不是"领导"，这是"消息搬运工"。
 
-自动关闭防止队友无限空转——如果所有任务都做完了，队友就自己退出。
+理想情况：Lead 创建任务图，spawn 队友，然后队友自己去任务板上找活干。
 
-## 12.2 AutonomousLoop 类
+## The Solution
+
+引入 **IDLE/WORK 自主循环**：
+
+```
+队友的生命周期：
+  spawn → IDLE → 发现任务 → claim → WORK → 完成 → IDLE → ...
+                 ↓ (60s 没活干)
+              auto-SHUTDOWN
+```
+
+三个新工具给队友使用：
+
+| 工具 | 功能 |
+|---|---|
+| `scan_tasks` | 扫描 `.tasks/` 中可认领的任务 |
+| `claim_task` | 原子性认领一个 pending 任务 |
+| `complete_my_task` | 标记自己的任务为完成 |
+
+## 12.1 扫描可认领的任务
+
+```python
+def scan_claimable_tasks(role=""):
+    claimable = []
+    for fname in sorted(os.listdir(TASKS_DIR)):
+        task = json.load(open(path))
+        # 只认领 pending 且未被 own 的任务
+        if task.get("status") == "pending" and not task.get("owner"):
+            claimable.append(task)
+    return claimable
+```
+
+两个条件：`status == "pending"` **且** `owner` 为空。这确保：
+- blocked 的任务不会被认领（依赖还没完成）
+- 已被其他队友认领的任务不会重复认领
+
+## 12.2 原子性认领
+
+```python
+def claim_task(task_id, owner):
+    task = json.load(open(path))
+    # 检查是否仍然可认领
+    if task.get("status") != "pending" or task.get("owner"):
+        return False  # 已被其他人认领
+    task["owner"] = owner
+    task["status"] = "in_progress"
+    json.dump(task, open(path, "w"))
+    return True
+```
+
+"原子性"在这里是一个简化——我们没有用文件锁，而是依赖"检查-然后-设置"模式。在单机多线程环境下，两个队友同时认领同一个任务的概率很低，即使发生冲突，也只是一个认领失败（返回 False），不会导致数据损坏。
+
+在生产系统中，你会用数据库事务或分布式锁来保证真正的原子性。但对于学习目的，这个简化版本展示了核心思想。
+
+## 12.3 AutonomousLoop 封装
 
 ```python
 class AutonomousLoop:
@@ -59,187 +97,152 @@ class AutonomousLoop:
         self.name = name
         self.role = role
         self.idle_timeout = idle_timeout
-        self.poll_interval = poll_interval
-        self._idle_since = time.time()
-        self._shutdown = False
-```
+        self._last_activity = time.time()
 
-核心方法——**扫描并认领任务**：
-
-```python
-def check_and_claim(self) -> dict | None:
-    tasks_dir = os.path.join(os.getcwd(), ".tasks")
-    if not os.path.isdir(tasks_dir):
+    def check_and_claim(self):
+        """检查可认领任务，返回认领到的或 None。"""
+        tasks = scan_claimable_tasks(self.role)
+        for task in tasks:
+            if claim_task(task["id"], self.name):
+                self._last_activity = time.time()
+                return task
         return None
 
-    for fname in sorted(os.listdir(tasks_dir)):
-        if not fname.endswith(".json"):
-            continue
-        with open(os.path.join(tasks_dir, fname)) as f:
-            task = json.load(f)
-
-        if task.get("status") != "pending":
-            continue
-        if task.get("owner"):
-            continue  # 已有人认领
-
-        # 认领！
-        task["owner"] = self.name
-        task["status"] = "in_progress"
-        with open(os.path.join(tasks_dir, fname), "w") as f:
-            json.dump(task, f, ensure_ascii=False, indent=2)
-        return task
-
-    return None
+    def should_shutdown(self):
+        """60 秒没活干就自动关闭。"""
+        return (time.time() - self._last_activity) > self.idle_timeout
 ```
 
-注意扫描逻辑：
-1. 只看 `.tasks/` 目录中的 JSON 文件
-2. 只认领 `status == "pending"` 且没有 `owner` 的任务
-3. 认领是"读-改-写"操作——不是真正的原子操作
+关键设计：
+- **超时自动关闭**：空闲 60 秒后 `should_shutdown()` 返回 True。这防止了无用的队友永远占用资源。
+- **活动计时重置**：认领任务、完成任务、收到邮箱消息都会重置计时器。
 
-> **并发风险**：两个队友可能同时认领同一个任务。在生产环境中，这需要文件锁或数据库事务。在我们的教学场景中，这种冲突很少发生，我们暂时接受这个限制。
-
-## 12.3 三个自主工具
-
-| 工具 | 功能 | 使用者 |
-|------|------|--------|
-| `scan_tasks` | 扫描任务板中的待认领任务 | 队友 |
-| `claim_task` | 认领指定任务 | 队友 |
-| `complete_my_task` | 标记任务为完成 | 队友 |
+## 12.4 任务完成与级联解除
 
 ```python
-AUTONOMOUS_TOOLS = [CLAIM_TASK_TOOL, COMPLETE_TASK_TOOL, SCAN_TASKS_TOOL]
+def complete_task(task_id, owner, result=""):
+    task = json.load(open(path))
+    if task.get("owner") != owner:
+        return False  # 只有 owner 能完成自己的任务
+    task["status"] = "completed"
+    task["result"] = result
+    json.dump(task, open(path, "w"))
+    _unblock_downstream(task_id)  # 自动解除下游阻塞
+    return True
 ```
 
-工厂函数绑定 `AutonomousLoop` 实例：
+注意 `_unblock_downstream`——这和 Chapter 9 的 TaskGraph 逻辑一致。当一个任务完成时，它的下游任务从 `blocked` 变为 `pending`，其他空闲的队友就能扫描到这些新解锁的任务。
 
-```python
-def make_autonomous_handlers(auto_loop):
-    def handle_scan_tasks():
-        task = auto_loop.check_and_claim()
-        if task is None:
-            return "没有可认领的任务"
-        return f"已认领任务: {task['id']} — {task.get('description', '')}"
+这创造了一个优美的**流水线效应**：
+1. 队友 A 完成 task_1
+2. task_2 自动从 blocked → pending
+3. 队友 B 在下次扫描时发现 task_2，认领并开始工作
+4. Lead 不需要干预任何事
 
-    def handle_claim_task(task_id):
-        # 认领指定 ID 的任务
-        ...
+## 12.5 集成到 Agent
 
-    def handle_complete(task_id, result=""):
-        ok = auto_loop.mark_complete(task_id, result)
-        if ok:
-            auto_loop.reset_timer()
-            return f"任务 {task_id} 已完成"
-        return f"[error: 无法完成任务 {task_id}]"
-
-    return {
-        "scan_tasks": handle_scan_tasks,
-        "claim_task": handle_claim_task,
-        "complete_my_task": handle_complete,
-    }
-```
-
-`handle_complete` 调用 `reset_timer()`——完成任务后重置空闲计时器，延长队友的存活时间。
-
-## 12.4 队友的工具集演化
-
-到本章为止，工具集的分层结构已经很清晰：
-
-```
-TOOLS (所有工具)
-  └→ _PARENT_ONLY 排除 → CHILD_TOOLS (子智能体工具)
-     └→ + TEAMMATE_PROTOCOL_TOOLS → (协议工具)
-     └→ + AUTONOMOUS_TOOLS → TEAMMATE_TOOLS (队友完整工具集)
-```
+队友的工具集新增三个自主工具：
 
 ```python
 TEAMMATE_TOOLS = CHILD_TOOLS + TEAMMATE_PROTOCOL_TOOLS + AUTONOMOUS_TOOLS
 ```
 
-在 `agent.py` 中，spawn 队友时组装 handler：
+spawn 时注入 AutonomousLoop：
 
 ```python
 def handle_spawn(name, role):
     teammate_handlers = dict(child_handlers)
     teammate_handlers.update(make_teammate_protocol_handlers(name))
-    auto_loop = AutonomousLoop(name=name, role=role)
-    teammate_handlers.update(make_autonomous_handlers(auto_loop))
+    auto_loop = AutonomousLoop(name=name, role=role)  # NEW
+    teammate_handlers.update(make_autonomous_handlers(auto_loop))  # NEW
     return team_manager.spawn(
-        ...,
+        name=name, role=role,
         tools=TEAMMATE_TOOLS,
         tool_handlers=teammate_handlers,
+        ...
     )
 ```
 
-每个队友有自己的 `AutonomousLoop` 实例——不同队友的空闲计时器和认领记录是独立的。
+每个队友有自己独立的 `AutonomousLoop` 实例——独立的超时计时器、独立的活动追踪。
 
-## 12.5 自主的边界
+## 12.6 被动 vs 自主的平衡
 
-完全自主可能很危险——如果队友认领了一个它不具备能力的任务怎么办？现阶段我们采用简单策略：
+队友现在有两种获取任务的方式：
 
-1. **任何待认领的任务都可以被认领**：不做能力匹配
-2. **Lead 可以通过 `task_create` 的 description 引导**：描述中写明"适合 reviewer 角色"
-3. **队友做不了可以标记失败**：用 `complete_my_task` 并在 result 中说明
+| 方式 | 触发 | 场景 |
+|---|---|---|
+| **被动** | Lead 通过 `send` 分配 | 需要特定指示的任务 |
+| **自主** | 队友通过 `scan_tasks` 发现 | 已在任务板上的标准任务 |
 
-更成熟的方案（在第 16 章讨论）包括：任务标签匹配、角色能力声明、自动回退机制。
+两种方式共存。Lead 可以：
+1. 创建任务图 → 队友自动认领（自主模式）
+2. 直接 send 消息 → 队友立即处理（被动模式）
 
-## 12.6 试一试
+这不是非此即彼——同一个队友可以同时响应邮箱消息和扫描任务板。
+
+## 12.7 试一试
 
 ```bash
 cd miniagent
 python agent.py
 ```
 
-```
-You: 创建一个 reviewer 队友，然后创建 3 个审查任务，观察它自动认领
-
-  [Tool: spawn] reviewer (代码审查员)
-  [Tool: task_create] 审查 todo.py
-  [Tool: task_create] 审查 context.py
-  [Tool: task_create] 审查 subagent.py
-```
-
-观察：reviewer 会在 IDLE 循环中发现这些任务，自动调用 `scan_tasks` 认领并执行。
+试试自主工作流：
 
 ```
-You: 查看任务状态
-
-  [Tool: task_list] (所有任务)
-  // 可以看到任务的 owner 字段被设置为 "reviewer"
+You: 帮我规划一个 Web 项目：
+     1) 设计 API（无依赖）
+     2) 写前端（依赖 API）
+     3) 写测试（依赖 API）
+     4) 部署（依赖前端和测试）
+     然后创建两个队友来自动完成这些任务
 ```
 
-> **Try It Yourself**：创建 2 个不同角色的队友和 5 个任务，观察它们如何分配。试试在没有任务时，队友是否会在 60 秒后自动关闭。
+观察 Agent 如何：
+1. 用 `task_create` 建立有依赖的任务图
+2. 用 `spawn` 创建两个队友
+3. 队友自动 `scan_tasks` → `claim_task` → 执行 → `complete_my_task`
+4. 完成任务自动解锁下游，其他队友认领
+
+> **Try It Yourself**：观察 `.tasks/` 目录中 JSON 文件的 `owner` 字段变化。不同的任务被不同的队友认领。
 
 ## What Changed
 
 ```
 miniagent/
-├── agent.py            ← CHANGED: +15 行（autonomous 导入、TEAMMATE_TOOLS 定义、spawn 集成）
-├── autonomous.py       ← NEW: 196 行（AutonomousLoop、IDLE/WORK 循环、3 个工具）
-├── protocols.py
-├── team.py
-├── tasks.py
-├── background.py
+├── agent.py            ← CHANGED: +10 行（autonomous 导入、spawn 注入 AutonomousLoop）
+├── todo.py
+├── skill_loader.py
 ├── context.py
 ├── subagent.py
-├── skill_loader.py
-└── todo.py
+├── background.py
+├── tasks.py
+├── team.py
+├── protocols.py
+├── autonomous.py       ← NEW: 196 行（AutonomousLoop、scan/claim/complete、3 个工具）
+├── requirements.txt
+└── skills/
+    └── code-review/
+        └── SKILL.md
 ```
 
 | 指标 | Chapter 11 | Chapter 12 |
-|------|-----------|------------|
-| 工具数 | 23 | **26** (+scan_tasks, +claim_task, +complete_my_task) |
+|------|------------|------------|
+| 工具数 | 21 | **21**（Lead 不变；队友 +3：scan_tasks, claim_task, complete_my_task）|
 | 模块数 | 9 | **10** (+autonomous.py) |
 | 能力 | 结构化协议 | **+自主任务认领** |
-| 队友模式 | 被动等待 | **+主动扫描** |
+| 队友行为 | 被动等待 | **被动 + 自主扫描** |
+
+注意 Lead 的工具数没变——自主工具只给队友使用。Lead 不需要 `scan_tasks`，它通过 `task_create` 和 `send` 来指挥。
+
+下一章将解决一个多 Agent 协作的经典问题：文件冲突。两个队友同时编辑同一个文件会怎样？
 
 ## Summary
 
-- 被动队友需要 Lead 手动分配每个任务，Lead 沦为调度器
-- AutonomousLoop 实现 IDLE/WORK 两阶段循环：扫描 → 认领 → 执行 → 完成 → 回到扫描
-- 任务认领通过读取 `.tasks/` 目录中的 pending 任务并设置 owner
-- 三个自主工具：scan_tasks（扫描）、claim_task（认领）、complete_my_task（完成）
-- TEAMMATE_TOOLS = CHILD_TOOLS + TEAMMATE_PROTOCOL_TOOLS + AUTONOMOUS_TOOLS
-- idle_timeout 机制防止队友无限空转，没有任务时自动关闭
-- 每个队友的 AutonomousLoop 实例独立，空闲计时器和认领记录互不影响
+- 被动队友需要 Lead 手动分配每个任务，Lead 变成"消息搬运工"
+- 自主队友主动扫描 `.tasks/` 目录，认领 pending 且无 owner 的任务
+- AutonomousLoop 封装了自主行为：扫描、认领、超时关闭
+- `claim_task` 使用"检查-然后-设置"模式实现简化的原子性认领
+- 完成任务触发级联解除阻塞，形成流水线效应
+- 被动和自主两种模式共存，Lead 可灵活选择
+- 空闲 60 秒自动关闭，防止资源浪费

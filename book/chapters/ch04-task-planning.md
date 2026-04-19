@@ -4,6 +4,9 @@
 
 > 给 Agent 一个多步骤任务——"创建一个 Python 包，包含 setup.py、README 和测试"——它会东一下西一下，跳步、重复、忘记目标。本章你将引入 TodoManager，让 Agent 能将复杂任务拆解为步骤并追踪进度。这是 Agent 从"能干活"到"会思考"的关键一步。
 
+![Conceptual: An autonomous planning loop](images/ch04/fig-04-01-concept.png)
+
+*Figure 4-1. The planning loop: think, act, observe, repeat — turning chaos into ordered steps.*
 ## The Problem
 
 启动 REPL，给 Agent 一个复杂任务：

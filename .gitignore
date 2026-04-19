@@ -23,3 +23,12 @@ Thumbs.db
 .tasks/
 .team/
 .worktrees/
+
+# Qoder config
+.qoder/
+
+# Build output (distributed via GitHub Releases)
+book/build/
+
+# Image staging (duplicates of book/images/)
+vibe_images/

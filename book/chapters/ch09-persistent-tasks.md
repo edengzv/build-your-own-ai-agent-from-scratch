@@ -6,6 +6,9 @@
 
 > **Part III 终章**：这是 DELEGATION 阶段的最后一章。完成后，你的 Agent 将拥有完整的分工能力：子智能体、后台任务、持久化任务图。
 
+![Conceptual: Sub-agent delegation](images/ch09/fig-09-01-concept.png)
+
+*Figure 9-1. Persistent tasks: write plans to disk so they survive restarts and sessions.*
 ## The Problem
 
 试试这个场景：
@@ -250,7 +253,7 @@ miniagent/
 ├── context.py
 ├── subagent.py
 ├── background.py
-├── tasks.py            ← NEW: 240 行（TaskGraph DAG、4 个 CRUD 工具）
+├── tasks.py            ← NEW: 282 行（TaskGraph DAG、4 个 CRUD 工具）
 ├── requirements.txt
 └── skills/
     └── code-review/
