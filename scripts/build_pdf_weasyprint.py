@@ -636,36 +636,60 @@ def build_cover_html(cover_path: Path, images_dir: Path) -> str:
 # Front matter
 # ───────────────────────────────────────────────────────────────────────
 
-def build_front_matter_html() -> str:
+def build_front_matter_html(lang: str = "zh") -> str:
     """Generate half-title, title page, and copyright page."""
 
-    halftitle = (
-        '<div class="halftitle-page">\n'
-        '<p class="halftitle-title">智能体入门</p>\n'
-        '<p class="halftitle-subtitle">从零构建通用 AI Agent</p>\n'
-        '</div>'
-    )
-
-    titlepage = (
-        '<div class="titlepage">\n'
-        '<p class="titlepage-title">智能体入门</p>\n'
-        '<p class="titlepage-subtitle">从零构建通用 AI Agent</p>\n'
-        '<p class="titlepage-subtitle-en">Build Your Own AI Agent from Scratch</p>\n'
-        '<hr class="titlepage-rule"/>\n'
-        '<p class="titlepage-author">zhengfeng</p>\n'
-        '</div>'
-    )
-
-    copyright_page = (
-        '<div class="copyright-page">\n'
-        '<p><strong>智能体入门：从零构建通用 AI Agent</strong></p>\n'
-        '<p>Build Your Own AI Agent from Scratch</p>\n'
-        '<p>&copy; 2025 zhengfeng. All rights reserved.</p>\n'
-        '<p class="copyright-meta">First Edition, April 2025</p>\n'
-        '<p class="copyright-meta">Typeset with WeasyPrint &amp; CSS Paged Media</p>\n'
-        '<p class="copyright-meta">Body: Songti SC &middot; Headings: Heiti SC &middot; Code: Menlo</p>\n'
-        '</div>'
-    )
+    if lang == "en":
+        halftitle = (
+            '<div class="halftitle-page">\n'
+            '<p class="halftitle-title">Build Your Own AI Agent</p>\n'
+            '<p class="halftitle-subtitle">from Scratch</p>\n'
+            '</div>'
+        )
+        titlepage = (
+            '<div class="titlepage">\n'
+            '<p class="titlepage-title">Build Your Own AI Agent</p>\n'
+            '<p class="titlepage-subtitle">from Scratch</p>\n'
+            '<p class="titlepage-subtitle-en">'
+            '\u667a\u80fd\u4f53\u5165\u95e8\uff1a\u4ece\u96f6\u6784\u5efa\u901a\u7528 AI Agent</p>\n'
+            '<hr class="titlepage-rule"/>\n'
+            '<p class="titlepage-author">zhengfeng</p>\n'
+            '</div>'
+        )
+        copyright_page = (
+            '<div class="copyright-page">\n'
+            '<p><strong>Build Your Own AI Agent from Scratch</strong></p>\n'
+            '<p>&copy; 2025 zhengfeng. All rights reserved.</p>\n'
+            '<p class="copyright-meta">First Edition, April 2025</p>\n'
+            '<p class="copyright-meta">Typeset with WeasyPrint &amp; CSS Paged Media</p>\n'
+            '</div>'
+        )
+    else:
+        halftitle = (
+            '<div class="halftitle-page">\n'
+            '<p class="halftitle-title">智能体入门</p>\n'
+            '<p class="halftitle-subtitle">从零构建通用 AI Agent</p>\n'
+            '</div>'
+        )
+        titlepage = (
+            '<div class="titlepage">\n'
+            '<p class="titlepage-title">智能体入门</p>\n'
+            '<p class="titlepage-subtitle">从零构建通用 AI Agent</p>\n'
+            '<p class="titlepage-subtitle-en">Build Your Own AI Agent from Scratch</p>\n'
+            '<hr class="titlepage-rule"/>\n'
+            '<p class="titlepage-author">zhengfeng</p>\n'
+            '</div>'
+        )
+        copyright_page = (
+            '<div class="copyright-page">\n'
+            '<p><strong>智能体入门：从零构建通用 AI Agent</strong></p>\n'
+            '<p>Build Your Own AI Agent from Scratch</p>\n'
+            '<p>&copy; 2025 zhengfeng. All rights reserved.</p>\n'
+            '<p class="copyright-meta">First Edition, April 2025</p>\n'
+            '<p class="copyright-meta">Typeset with WeasyPrint &amp; CSS Paged Media</p>\n'
+            '<p class="copyright-meta">Body: Songti SC &middot; Headings: Heiti SC &middot; Code: Menlo</p>\n'
+            '</div>'
+        )
 
     return f"{halftitle}\n\n{titlepage}\n\n{copyright_page}"
 
@@ -763,7 +787,7 @@ def main() -> None:
         print(f"[build] Cover: {cover_path}")
 
     # 2. Front matter
-    front_matter_html = build_front_matter_html()
+    front_matter_html = build_front_matter_html(lang=args.lang)
     if args.verbose:
         print("[build] Front matter generated (half-title, title, copyright)")
 
