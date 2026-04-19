@@ -4,12 +4,21 @@
 
 本书采用"从零构建"的方法论，带领读者从一个不到 30 行代码的 Agent 循环开始，逐章添加一个新能力，最终构建出一个功能完备的通用智能体系统 —— **MiniAgent**。
 
+## 下载阅读
+
+| 版本 | PDF | HTML |
+|------|-----|------|
+| 中文版 (214 页) | [book-zh.pdf](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-zh.pdf) | [book-zh.html](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-zh.html) |
+| English (224 pages) | [book-en.pdf](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-en.pdf) | [book-en.html](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-en.html) |
+
+> PDF 采用 O'Reilly 风格排版 (7x9.25")，HTML 版本带侧边栏目录导航，可在浏览器中阅读。
+
 ## 快速开始
 
 ```bash
 # 克隆项目
-git clone <repo-url>
-cd hermas
+git clone https://github.com/edengzv/build-your-own-ai-agent-from-scratch.git
+cd build-your-own-ai-agent-from-scratch
 
 # 安装依赖
 pip install -r miniagent/requirements.txt
