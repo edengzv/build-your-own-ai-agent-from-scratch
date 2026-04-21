@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import html as html_mod
+import os
 import re
 import sys
 from pathlib import Path
@@ -819,14 +820,16 @@ def main() -> None:
         body_html, css_text, pygments_css, sidebar_html, lang_attr,
     )
 
-    # 7. Write HTML
+    # 7. Write HTML (with relative image paths for portability)
     output.parent.mkdir(parents=True, exist_ok=True)
+    images_rel = os.path.relpath(images_dir, output.parent)
+    html_for_file = full_html.replace(images_dir.as_uri(), images_rel)
     html_path = output.with_suffix(".html")
-    html_path.write_text(full_html, encoding="utf-8")
+    html_path.write_text(html_for_file, encoding="utf-8")
     if args.verbose:
         print(f"[build] HTML written: {html_path}")
 
-    # 8. Build PDF
+    # 8. Build PDF (keep file:// URIs — WeasyPrint resolves them)
     if args.verbose:
         print("[build] Generating PDF with WeasyPrint...")
 

@@ -6,12 +6,12 @@
 
 ## 下载阅读
 
-| 版本 | PDF | HTML |
+| 版本 | PDF | HTML (含图片) |
 |------|-----|------|
-| 中文版 (214 页) | [book-zh.pdf](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-zh.pdf) | [book-zh.html](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-zh.html) |
-| English (224 pages) | [book-en.pdf](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-en.pdf) | [book-en.html](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-en.html) |
+| 中文版 (214 页) | [book-zh.pdf](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-zh.pdf) | [book-zh-html.zip](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-zh-html.zip) |
+| English (224 pages) | [book-en.pdf](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-en.pdf) | [book-en-html.zip](https://github.com/edengzv/build-your-own-ai-agent-from-scratch/releases/download/v1.0.0/book-en-html.zip) |
 
-> PDF 采用 O'Reilly 风格排版 (7x9.25")，HTML 版本带侧边栏目录导航，可在浏览器中阅读。
+> PDF 采用 O'Reilly 风格排版 (7x9.25")。HTML 版本带侧边栏目录导航，下载 zip 解压后在浏览器中打开即可阅读。
 
 ## 快速开始
 
