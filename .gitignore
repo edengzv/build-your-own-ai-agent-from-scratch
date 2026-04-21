@@ -29,6 +29,7 @@ Thumbs.db
 
 # Build output (distributed via GitHub Releases)
 book/build/
+skill-book/book/build/
 
 # Image staging (duplicates of book/images/)
 vibe_images/
